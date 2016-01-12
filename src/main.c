@@ -82,7 +82,68 @@ struct global_state
 
     const char *input_file_path;    // Default file path for input file
     sk_str *resolved_path;          // Path to resolved input file
+
+    board_state game_state;
 };
+
+struct board_state;
+typedef struct board_state board_state;
+
+struct board_state
+{
+    UINT_64 width;
+    UINT_64 height;
+
+    SINT_64 **tiles;
+};
+
+enum direction;
+typedef enum direction direction;
+
+enum direction
+{
+    UP,
+    DOWN,
+    LEFT,
+    RIGHT
+};
+
+struct move;
+typedef struct move move;
+
+struct move
+{
+    SINT_64 piece;
+    direction dir;
+};
+
+
+
+global_state state;
+
+
+bool loadGameState(const char *file_name);
+
+void outputGameState();
+
+bool cloneGameState(board_state *source, board_state *dest);
+
+bool gameStateSolved(board_state *source);
+
+void allMovesHelp(board_state *source, SINT_64 piece, sk_list *moves);
+
+void allMoves(board_state *source, sk_list *moves);
+
+void applyMove(board_state *source, move next_move);
+
+void applyMoveCloning(board_state *source, move next_move, board_state *dest);
+
+bool stateEqual(board_state *a, board_state *b);
+
+void normalizeState(board_state *source);
+
+void randomWalks(board_state *source, UINT_64 N);
+
 
 /**
  * @brief                       Debugging print function.
@@ -217,13 +278,10 @@ int main (int argc, char **argv)
 
     int retval = EXIT_SUCCESS;
 
-    struct global_state state =
-    {
-        .printer = printer,
+    state.printer = printer;
+    state.input_file_path = "./assets/SBP-level0.txt";
+    state.resolved_path = NULL;
 
-        .input_file_path = "./assets/SBP-level0.txt",
-        .resolved_path = NULL,
-    };
 
     // Step 0: Retrieve program configuration from command line
     if (!interpret_input_arguments(&state, argc, argv))
