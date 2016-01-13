@@ -99,6 +99,11 @@ struct global_state
     const char *input_file_path;    // Default file path for input file
     sk_str *resolved_path;          // Path to resolved input file
 
+    bool random_walk;
+    UINT_64 N;
+    bool depth_first;
+    bool breadth_first;
+
     board_state *game_state;
 };
 
@@ -132,26 +137,101 @@ struct move
 global_state state;
 
 
+/**
+ * @brief                   Loads the game state from file with given filename
+ *
+ * @param[in] file_name     - Path to file to load.
+ *
+ * @return                  True if game state was successfully loaded.
+ */
 bool loadGameState(const char *file_name);
 
+/**
+ * @brief                   Prints the global game state to the screen.
+ */
 void outputGameState();
 
+/**
+ * @brief                   Clones game state \c source into \c dest.
+ *
+ * @param[in] source        - State to clone
+ * @param[out] dest         - State to populate with clone
+ *
+ * @return                  true if clone succeeded.
+ */
 bool cloneGameState(board_state *source, board_state *dest);
 
+/**
+ * @brief                   Determines whether the current game state is solved.
+ *
+ * @param[in] source        - State to check
+ *
+ * @return                  true if board state is solved.
+ */
 bool gameStateSolved(board_state *source);
 
+/**
+ * @brief                   Given a board state \c source and a piece \c piece, populates \c moves
+ *                              with all possible moves for \c piece.
+ *
+ * @param[in] source        - Board state to check
+ * @param[in] piece         - Piece to observe
+ * @param[out] moves        - Pointer to list to construct and populate
+ */
 void allMovesHelp(board_state *source, SINT_64 piece, sk_list *moves);
 
+/**
+ * @brief                   Given a board state \c source, populates \c moves with all
+ *                                  possible moves.
+ *
+ * @param[in] source        - Board state to check
+ * @param[out] moves        - Pointer to list to construct and populate
+ */
 void allMoves(board_state *source, sk_list *moves);
 
+/**
+ * @brief                   Given a board state \c source, applies \c next_move to state in place.
+ *
+ * @param[in] source        - Board state to apply move to
+ * @param[in] next_move     - Move to apply
+ */
 void applyMove(board_state *source, move next_move);
 
+/**
+ * @brief                   Given a board state \c source, applies \c next move to
+ *                              a clone of \c source, storing new state into \c dest.
+ *
+ * @param[in] source        - State to apply move to
+ * @param[in] next_move     - Move to apply
+ * @param[out] dest         - State to populate with cloned new state
+ */
 void applyMoveCloning(board_state *source, move next_move, board_state *dest);
 
+/**
+ * @brief                   Determines whether state \c a is exactly equal to state \c b
+ *
+ * @param[in] a             - State to compare
+ * @param[in] b             - State to compare to
+ *
+ * @return                  true if both states are exactly equal.
+ */
 bool stateEqual(board_state *a, board_state *b);
 
+/**
+ * @brief                   Given board state \c source, refactors state internals into
+ *                              equivalent normal form.
+ *
+ * @param[in] source        - State to refactor
+ */
 void normalizeState(board_state *source);
 
+/**
+ * @brief                   Applies up to \c N random moves to \c source, halting if the
+ *                              board is solved after any move.
+ *
+ * @param[in] source        - Starting board state
+ * @param[in] N             - Maximum number of moves to apply.
+ */
 void randomWalks(board_state *source, UINT_64 N);
 
 
@@ -176,6 +256,39 @@ void app_debug(printer_t *out, int level, char *fmt, ...);
  * @param[in] handle            - Handle to common state
  */
 void handle_f(sk_str *match, sk_str **args, void *handle);
+
+/**
+ * @brief                       Keyword "r" handler.
+ *                                  Arguments: 1
+ *                                  args[1] :
+ *
+ * @param[in] match             - Input argument string which matches registered keyword
+ * @param[in] args              - Arguments following the keyword
+ * @param[in] handle            - Handle to common state
+ */
+void handle_r(sk_str *match, sk_str **args, void *handle);
+
+/**
+ * @brief                       Keyword "d" handler.
+ *                                  Arguments: 1
+ *                                  args[1] :
+ *
+ * @param[in] match             - Input argument string which matches registered keyword
+ * @param[in] args              - Arguments following the keyword
+ * @param[in] handle            - Handle to common state
+ */
+void handle_d(sk_str *match, sk_str **args, void *handle);
+
+/**
+ * @brief                       Keyword "b" handler.
+ *                                  Arguments: 1
+ *                                  args[1] :
+ *
+ * @param[in] match             - Input argument string which matches registered keyword
+ * @param[in] args              - Arguments following the keyword
+ * @param[in] handle            - Handle to common state
+ */
+void handle_b(sk_str *match, sk_str **args, void *handle);
 
 /**
  * @brief                       Keyword "verbose" handler.
@@ -293,6 +406,9 @@ int main (int argc, char **argv)
     state.printer = printer;
     state.input_file_path = "./assets/SBP-level0.txt";
     state.resolved_path = NULL;
+    state.random_walk = false;
+    state.breadth_first = false;
+    state.depth_first = false;
     state.game_state = NULL;
 
 
@@ -314,7 +430,23 @@ int main (int argc, char **argv)
 
     loadGameState(state.resolved_path->string);
     normalizeState(state.game_state);
-    outputGameState();
+
+    if (state.random_walk)
+    {
+        randomWalks(state.game_state, state.N);
+    }
+    else if (state.depth_first)
+    {
+        // TODO: Implement me
+    }
+    else if (state.breadth_first)
+    {
+        // TODO: Implement me
+    }
+    else
+    {
+        randomWalks(state.game_state, 3);
+    }
 
 cleanup:
     destroy_printer(printer);
@@ -575,7 +707,7 @@ void allMovesHelp(board_state *source, SINT_64 piece, sk_list *moves)
     // DOWN
     move_possible = true;
 
-    for (i = source->height; /*i >= 0*/; --i)
+    for (i = source->height - 1; /*i >= 0*/; --i)
     {
         for (j = 0; j < source->width; ++j)
         {
@@ -645,7 +777,7 @@ void allMovesHelp(board_state *source, SINT_64 piece, sk_list *moves)
 
     for (i = 0; i < source->height; ++i)
     {
-        for (j = source->width; /*j >= 0*/; --j)
+        for (j = source->width - 1; /*j >= 0*/; --j)
         {
             if (source->tiles[i][j] == piece)
             {
@@ -707,7 +839,7 @@ void allMoves(board_state *source, sk_list *moves)
         }
     }
 
-    for (i = 3; i < (UINT_64)max; ++i)
+    for (i = 2; i < (UINT_64)max + 1; ++i)
     {
         sk_list new_moves;
         allMovesHelp(source, i, &new_moves);
@@ -797,7 +929,7 @@ void applyMove(board_state *source, move next_move)
         {
             break;
         }
-        for (i = source->height; /* i >= 0 */; --i)
+        for (i = source->height - 1; /* i >= 0 */; --i)
         {
             for (j = 0; j < source->width; ++j)
             {
@@ -876,15 +1008,15 @@ void applyMove(board_state *source, move next_move)
         }
         for (i = 0; i < source->height; ++i)
         {
-            for (j = source->width; /*j >= 0*/; --j)
+            for (j = source->width - 1; /*j >= 0*/; --j)
             {
                 if (source->tiles[i][j] == next_move.piece)
                 {
-                    source->tiles[i][j - 1] = next_move.piece;
+                    source->tiles[i][j + 1] = next_move.piece;
                     source->tiles[i][j] = CLEAR;
                 }
                 // Avoid unsigned infinite loop
-                if (i == 0)
+                if (j == 0)
                 {
                     break;
                 }
@@ -1024,9 +1156,14 @@ void randomWalks(board_state *source, UINT_64 N)
     UINT_64 num_moves;
     UINT_64 move_idx;
     move *next_move;
-    for (i = 0; i < N; ++i)
+    for (i = 0; i <= N; ++i)
     {
         outputGameState();
+        if (i == N)
+        {
+            break;
+        }
+
         if (gameStateSolved(source))
         {
             break;
@@ -1041,11 +1178,18 @@ void randomWalks(board_state *source, UINT_64 N)
             break;
         }
         move_idx = state.random.rand_64bit(&state.random) % num_moves;
+
+        state.printer->debug(state.printer, DEBUG_DETAILS,
+                                "Selected move %lu / %lu\n",
+                                move_idx + 1,
+                                num_moves);
+
         j = 0;
         sk_list_begin(&it, &moves);
         while (it.has_next(&it))
         {
             next_move = it.next(&it);
+
             if (j++ == move_idx)
             {
                 printf("\n");
@@ -1067,6 +1211,13 @@ void randomWalks(board_state *source, UINT_64 N)
                 printf("\n");
 
                 applyMove(source, *next_move);
+            }
+            else
+            {
+                state.printer->debug(state.printer, DEBUG_DETAILS,
+                                        "Potential move (%d,%d)\n",
+                                        next_move->piece,
+                                        next_move->dir);
             }
             free(next_move);
             sk_list_remove(&it);
@@ -1117,6 +1268,58 @@ void handle_f(sk_str *match, sk_str **args, void *handle)
     }
 }
 
+void handle_r(sk_str *match, sk_str **args, void *handle)
+{
+    global_state *state = handle;
+    sk_str *arg = args[1];
+    if (!match || !args || !arg || !handle)
+    {
+        return;
+    }
+
+    int N = 0;
+    if (!parse_int(arg, 0, &N))
+    {
+        state->printer->error(state->printer, "Failed to parse as int: %s\n", arg->string);
+    }
+    else
+    {
+        state->printer->debug(state->printer, DEBUG_DETAILS,
+                                "Updating random walk step count to %d\n",
+                                N);
+        state->N = N;
+        state->random_walk = true;
+    }
+}
+
+void handle_d(sk_str *match, sk_str **args, void *handle)
+{
+    global_state *state = handle;
+    sk_str *arg = args[1];
+    if (!match || !args || !arg || !handle)
+    {
+        return;
+    }
+
+    state->printer->debug(state->printer, DEBUG_DETAILS,
+                            "Updating to depth first search mode.\n");
+    state->depth_first = true;
+}
+
+void handle_b(sk_str *match, sk_str **args, void *handle)
+{
+    global_state *state = handle;
+    sk_str *arg = args[1];
+    if (!match || !args || !arg || !handle)
+    {
+        return;
+    }
+
+    state->printer->debug(state->printer, DEBUG_DETAILS,
+                            "Updating to breadth first search mode.\n");
+    state->breadth_first = true;
+}
+
 void handle_verbose(sk_str *match, sk_str **args, void *handle)
 {
     global_state *state = handle;
@@ -1152,6 +1355,24 @@ bool interpret_input_arguments(global_state *state, int argc, char **argv)
             .keyword = "f",
             .argc = 1,
             .handler = handle_f
+        },
+        // Random walk mode
+        {
+            .keyword = "r",
+            .argc = 1,
+            .handler = handle_r
+        },
+        // Depth first search mode
+        {
+            .keyword = "d",
+            .argc = 0,
+            .handler = handle_d
+        },
+        // Breadth first search mode
+        {
+            .keyword = "b",
+            .argc = 0,
+            .handler = handle_b
         },
         // Verbose mode
         {
@@ -1207,6 +1428,22 @@ bool validate_global_state(global_state *state)
     if (!state->resolved_path && !resolve_input_file(state->input_file_path, &state->resolved_path))
     {
         state->printer->error(state->printer, "Error: Failed to resolve input file path : %s.\n", state->input_file_path);
+        return false;
+    }
+
+    if (state->random_walk && state->breadth_first)
+    {
+        state->printer->error(state->printer, "Error: Conflicting solution algorithms selected.");
+        return false;
+    }
+    else if (state->random_walk && state->depth_first)
+    {
+        state->printer->error(state->printer, "Error: Conflicting solution algorithms selected.");
+        return false;
+    }
+    else if (state->depth_first && state->breadth_first)
+    {
+        state->printer->error(state->printer, "Error: Conflicting solution algorithms selected.");
         return false;
     }
 
