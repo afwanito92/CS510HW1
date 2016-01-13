@@ -2,8 +2,8 @@
  *
  * @file    main.c
  * @author  Eric Rock
- * @date    Apr 2, 2015
- * @brief   CG_hw2, adding polygon parsing, clipping, transformations, and scan conversion onto CG_hw1.
+ * @date    Jan 12, 2016
+ * @brief   sbp, A sliding block puzzle solver.
  *
  */
 
@@ -62,6 +62,11 @@
 // sk_vector, sk_vector_init, sk_vector_add, sk_vector_destroy
 #include "sk_vector/sk_vector.h"
 
+// sk_random
+#include "sk_random/sk_random.h"
+
+// sk_random_default_init
+#include "sk_random/sk_random_default.h"
 
 
 
@@ -76,18 +81,26 @@
 struct global_state;
 typedef struct global_state global_state;
 
+struct board_state;
+typedef struct board_state board_state;
+
+enum direction;
+typedef enum direction direction;
+
+struct move;
+typedef struct move move;
+
 struct global_state
 {
     printer_t *printer;
 
+    sk_random random;
+
     const char *input_file_path;    // Default file path for input file
     sk_str *resolved_path;          // Path to resolved input file
 
-    board_state game_state;
+    board_state *game_state;
 };
-
-struct board_state;
-typedef struct board_state board_state;
 
 struct board_state
 {
@@ -97,9 +110,6 @@ struct board_state
     SINT_64 **tiles;
 };
 
-enum direction;
-typedef enum direction direction;
-
 enum direction
 {
     UP,
@@ -108,16 +118,16 @@ enum direction
     RIGHT
 };
 
-struct move;
-typedef struct move move;
-
 struct move
 {
     SINT_64 piece;
     direction dir;
 };
 
-
+#define GOAL    -1
+#define CLEAR    0
+#define WALL     1
+#define MASTER   2
 
 global_state state;
 
@@ -276,11 +286,14 @@ int main (int argc, char **argv)
     printer->debug = app_debug;
     printer->debug_level = DEBUG_NONE;
 
+    sk_random_default_init(&state.random);
+
     int retval = EXIT_SUCCESS;
 
     state.printer = printer;
     state.input_file_path = "./assets/SBP-level0.txt";
     state.resolved_path = NULL;
+    state.game_state = NULL;
 
 
     // Step 0: Retrieve program configuration from command line
@@ -299,12 +312,774 @@ int main (int argc, char **argv)
         goto cleanup;
     }
 
+    loadGameState(state.resolved_path->string);
+    normalizeState(state.game_state);
+    outputGameState();
 
 cleanup:
     destroy_printer(printer);
     destroy_global_state(&state);
 
     exit(retval);
+}
+
+bool loadGameState(const char *file_name)
+{
+    bool retval = true;
+
+    sk_str *resolved_path = NULL;
+    if (!resolve_input_file(file_name, &resolved_path))
+    {
+        state.printer->error(state.printer, "Error: Failed to resolve input file path : %s.\n", file_name);
+        retval = false;
+        goto resolve_file_fail;
+    }
+
+    int input_fd = 0;
+    if (resolved_path && (input_fd = open(resolved_path->string, O_RDONLY)) < 0)
+    {
+        state.printer->error(state.printer, "Error: Failed to open input file : %s.\n", strerror(errno));
+        retval = false;
+        goto open_fail;
+    }
+
+    UINT_64 width;
+    UINT_64 height;
+
+    sk_iterator token_it;
+    char *token;
+    sk_str str_token;
+    sk_str line;
+
+    if (!fd_get_line(input_fd, &line))
+    {
+        retval = false;
+        goto dimensions_fail;
+    }
+
+    sk_str_split(&token_it, &line, ',');
+    int t_width;
+    int t_height;
+
+    token = token_it.next(&token_it);
+    sk_str_init(&str_token, token, 10);
+    parse_int(&str_token, 10, &t_width);
+    sk_str_destroy(&str_token);
+
+    token = token_it.next(&token_it);
+    sk_str_init(&str_token, token, 10);
+    parse_int(&str_token, 10, &t_height);
+    sk_str_destroy(&str_token);
+
+    state.printer->debug(state.printer, DEBUG_DETAILS,
+                            "Found width %d  height %d.\n",
+                            t_width,
+                            t_height);
+
+    token_it.destroy(&token_it);
+
+    sk_str_destroy(&line);
+
+    if (t_width <= 0 || t_height <= 0)
+    {
+        goto dimensions_fail;
+    }
+    width = t_width;
+    height = t_height;
+
+    SINT_64 **tiles = ALLOC(*tiles, height);
+    UINT_64 i;
+    for (i = 0; i < height; ++i)
+    {
+        tiles[i] = ALLOC(*(tiles[i]), width);
+    }
+
+    UINT_64 j;
+    for (i = 0; i < height; i++)
+    {
+        if (!fd_get_line(input_fd, &line))
+        {
+            goto matrix_fill_fail;
+        }
+
+        sk_str_split(&token_it, &line, ',');
+
+        for (j = 0; j < width; ++j)
+        {
+            if (!token_it.has_next(&token_it))
+            {
+                token_it.destroy(&token_it);
+                sk_str_destroy(&line);
+                retval = false;
+                goto matrix_fill_fail;
+            }
+            int val;
+            token = token_it.next(&token_it);
+            sk_str_init(&str_token, token, 10);
+            parse_int(&str_token, 10, &val);
+            sk_str_destroy(&str_token);
+            tiles[i][j] = val;
+        }
+
+        token_it.destroy(&token_it);
+
+        sk_str_destroy(&line);
+    }
+
+    state.game_state = ALLOC(*(state.game_state), 1);
+    state.game_state->width = width;
+    state.game_state->height = height;
+    state.game_state->tiles = tiles;
+
+    sk_str_destroy(resolved_path);
+    free(resolved_path);
+    close(input_fd);
+    return retval;
+
+matrix_fill_fail:
+
+    for (i = 0; i < height; ++i)
+    {
+        free(tiles[i]);
+    }
+    free(tiles);
+dimensions_fail:
+
+    if (input_fd > 0)
+    {
+        close(input_fd);
+    }
+open_fail:
+
+    sk_str_destroy(resolved_path);
+    free(resolved_path);
+resolve_file_fail:
+
+    return retval;
+}
+
+void outputGameState()
+{
+    if (!state.game_state)
+    {
+        return;
+    }
+
+    printf("%lu,%lu,\n",
+            state.game_state->width,
+            state.game_state->height);
+
+    UINT_64 i;
+    UINT_64 j;
+    for (i = 0; i < state.game_state->height; ++i)
+    {
+        for (j = 0; j < state.game_state->width; ++j)
+        {
+            printf("%ld,", state.game_state->tiles[i][j]);
+        }
+
+        printf("\n");
+    }
+}
+
+bool cloneGameState(board_state *source, board_state *dest)
+{
+    if (!source || !dest)
+    {
+        return false;
+    }
+
+    dest->width = source->width;
+    dest->height = source->height;
+    dest->tiles = ALLOC(*(dest->tiles), dest->height);
+
+    UINT_64 i, j;
+    for (i = 0; i < dest->height; ++i)
+    {
+        dest->tiles[i] = ALLOC(*(dest->tiles[i]), dest->width);
+        for (j = 0; j < dest->width; ++j)
+        {
+            dest->tiles[i][j] = source->tiles[i][j];
+        }
+    }
+    return true;
+}
+
+bool gameStateSolved(board_state *source)
+{
+    if (!source)
+    {
+        return false;
+    }
+
+    UINT_64 i, j;
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == -1)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void allMovesHelp(board_state *source, SINT_64 piece, sk_list *moves)
+{
+    if (!moves)
+    {
+        return;
+    }
+
+    sk_list_init(moves, NULL);
+
+    if (!source)
+    {
+        return;
+    }
+
+    UINT_64 i, j;
+    bool move_possible = true;
+
+    // UP
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == piece)
+            {
+                if ( !(  CLEAR == source->tiles[i - 1][j]
+                      || piece == source->tiles[i - 1][j]
+                      || (  MASTER == piece
+                         && GOAL == source->tiles[i - 1][j]
+                         )
+                      )
+                   )
+                {
+                    move_possible = false;
+                }
+            }
+        }
+    }
+
+    if (move_possible)
+    {
+        move *next_move = ALLOC(*next_move, 1);
+        next_move->piece = piece;
+        next_move->dir = UP;
+        sk_list_append(moves, next_move);
+    }
+
+    // DOWN
+    move_possible = true;
+
+    for (i = source->height; /*i >= 0*/; --i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == piece)
+            {
+                if ( !(  CLEAR == source->tiles[i + 1][j]
+                      || piece == source->tiles[i + 1][j]
+                      || (  MASTER == piece
+                         && GOAL == source->tiles[i + 1][j]
+                         )
+                      )
+                   )
+                {
+                    move_possible = false;
+                }
+            }
+        }
+
+        // Avoid unsigned infinite loop
+        if (i == 0)
+        {
+            break;
+        }
+    }
+
+    if (move_possible)
+    {
+        move *next_move = ALLOC(*next_move, 1);
+        next_move->piece = piece;
+        next_move->dir = DOWN;
+        sk_list_append(moves, next_move);
+    }
+
+    // LEFT
+    move_possible = true;
+
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == piece)
+            {
+                if ( !(  CLEAR == source->tiles[i][j - 1]
+                      || piece == source->tiles[i][j - 1]
+                      || (  MASTER == piece
+                         && GOAL == source->tiles[i][j - 1]
+                         )
+                      )
+                   )
+                {
+                    move_possible = false;
+                }
+            }
+        }
+    }
+
+    if (move_possible)
+    {
+        move *next_move = ALLOC(*next_move, 1);
+        next_move->piece = piece;
+        next_move->dir = LEFT;
+        sk_list_append(moves, next_move);
+    }
+
+    // RIGHT
+    move_possible = true;
+
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = source->width; /*j >= 0*/; --j)
+        {
+            if (source->tiles[i][j] == piece)
+            {
+                if ( !(  CLEAR == source->tiles[i][j + 1]
+                      || piece == source->tiles[i][j + 1]
+                      || (  MASTER == piece
+                         && GOAL == source->tiles[i][j + 1]
+                         )
+                      )
+                   )
+                {
+                    move_possible = false;
+                }
+            }
+
+            // Avoid unsigned infinite loop
+            if (j == 0)
+            {
+                break;
+            }
+        }
+    }
+
+    if (move_possible)
+    {
+        move *next_move = ALLOC(*next_move, 1);
+        next_move->piece = piece;
+        next_move->dir = RIGHT;
+        sk_list_append(moves, next_move);
+    }
+
+}
+
+void allMoves(board_state *source, sk_list *moves)
+{
+    if (!moves)
+    {
+        return;
+    }
+
+    sk_list_init(moves, NULL);
+
+    if (!source)
+    {
+        return;
+    }
+
+    SINT_64 max = 3;
+
+    UINT_64 i, j;
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] > max)
+            {
+                max = source->tiles[i][j];
+            }
+        }
+    }
+
+    for (i = 3; i < (UINT_64)max; ++i)
+    {
+        sk_list new_moves;
+        allMovesHelp(source, i, &new_moves);
+        sk_iterator it;
+        move *next_move = NULL;
+        sk_list_begin(&it, &new_moves);
+        while (it.has_next(&it))
+        {
+            next_move = it.next(&it);
+            sk_list_append(moves, next_move);
+            sk_list_remove(&it);
+        }
+        it.destroy(&it);
+        sk_list_destroy(&new_moves);
+    }
+}
+
+void applyMove(board_state *source, move next_move)
+{
+    if (!source)
+    {
+        return;
+    }
+
+    UINT_64 i, j;
+    bool move_possible = true;
+
+    switch (next_move.dir)
+    {
+    case UP:
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (move_possible && source->tiles[i][j] == next_move.piece)
+                {
+                    if ( !(  CLEAR == source->tiles[i - 1][j]
+                          || next_move.piece == source->tiles[i - 1][j]
+                          || (  MASTER == source->tiles[i][j]
+                             && GOAL == source->tiles[i - 1][j]
+                             )
+                          )
+                       )
+                    {
+                        move_possible = false;
+                    }
+                }
+            }
+        }
+        if (!move_possible)
+        {
+            break;
+        }
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (source->tiles[i][j] == next_move.piece)
+                {
+                    source->tiles[i - 1][j] = next_move.piece;
+                    source->tiles[i][j] = CLEAR;
+                }
+            }
+        }
+        break;
+    case DOWN:
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (move_possible && source->tiles[i][j] == next_move.piece)
+                {
+                    if ( !(  CLEAR == source->tiles[i + 1][j]
+                          || next_move.piece == source->tiles[i + 1][j]
+                          || (  MASTER == source->tiles[i][j]
+                             && GOAL == source->tiles[i + 1][j]
+                             )
+                          )
+                       )
+                    {
+                        move_possible = false;
+                    }
+                }
+            }
+        }
+        if (!move_possible)
+        {
+            break;
+        }
+        for (i = source->height; /* i >= 0 */; --i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (source->tiles[i][j] == next_move.piece)
+                {
+                    source->tiles[i + 1][j] = next_move.piece;
+                    source->tiles[i][j] = CLEAR;
+                }
+            }
+            // Avoid unsigned infinite loop
+            if (i == 0)
+            {
+                break;
+            }
+        }
+        break;
+    case LEFT:
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (move_possible && source->tiles[i][j] == next_move.piece)
+                {
+                    if ( !(  CLEAR == source->tiles[i][j - 1]
+                          || next_move.piece == source->tiles[i][j - 1]
+                          || (  MASTER == source->tiles[i][j]
+                             && GOAL == source->tiles[i][j - 1]
+                             )
+                          )
+                       )
+                    {
+                        move_possible = false;
+                    }
+                }
+            }
+        }
+        if (!move_possible)
+        {
+            break;
+        }
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (source->tiles[i][j] == next_move.piece)
+                {
+                    source->tiles[i][j - 1] = next_move.piece;
+                    source->tiles[i][j] = CLEAR;
+                }
+            }
+        }
+        break;
+    case RIGHT:
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = 0; j < source->width; ++j)
+            {
+                if (move_possible && source->tiles[i][j] == next_move.piece)
+                {
+                    if ( !(  CLEAR == source->tiles[i][j + 1]
+                          || next_move.piece == source->tiles[i][j + 1]
+                          || (  MASTER == source->tiles[i][j]
+                             && GOAL == source->tiles[i][j + 1]
+                             )
+                          )
+                       )
+                    {
+                        move_possible = false;
+                    }
+                }
+            }
+        }
+        if (!move_possible)
+        {
+            break;
+        }
+        for (i = 0; i < source->height; ++i)
+        {
+            for (j = source->width; /*j >= 0*/; --j)
+            {
+                if (source->tiles[i][j] == next_move.piece)
+                {
+                    source->tiles[i][j - 1] = next_move.piece;
+                    source->tiles[i][j] = CLEAR;
+                }
+                // Avoid unsigned infinite loop
+                if (i == 0)
+                {
+                    break;
+                }
+            }
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+void applyMoveCloning(board_state *source, move next_move, board_state *dest)
+{
+    if (!source || !dest)
+    {
+        return;
+    }
+
+    cloneGameState(source, dest);
+    applyMove(dest, next_move);
+}
+
+bool stateEqual(board_state *a, board_state *b)
+{
+    if (!a || !b || a->width != b->width || a->height != b->height)
+    {
+        return false;
+    }
+
+
+    UINT_64 i, j;
+    for (i = 0; i < a->height; ++i)
+    {
+        for (j = 0; j < a->width; ++j)
+        {
+            if (a->tiles[i][j] != b->tiles[i][j])
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+void tile_swap(board_state *source, SINT_64 target, SINT_64 replacement)
+{
+    if (!source)
+    {
+        return;
+    }
+
+    UINT_64 i, j;
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == target)
+            {
+                source->tiles[i][j] = replacement;
+            }
+        }
+    }
+}
+
+void normalizeState(board_state *source)
+{
+    if (!source)
+    {
+        return;
+    }
+
+    UINT_64 i, j;
+    // shift all tile numbers to be larger than any possible cell number
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            switch (source->tiles[i][j])
+            {
+            case WALL:
+            case CLEAR:
+            case GOAL:
+            case MASTER:
+                break;
+            default:
+                source->tiles[i][j] += (source->height * source->width + 3);
+                break;
+            }
+        }
+    }
+
+    // replace each block number with the smallest cell number it covers
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (  WALL == source->tiles[i][j]
+               || CLEAR == source->tiles[i][j]
+               || GOAL == source->tiles[i][j]
+               || MASTER == source->tiles[i][j]
+               )
+            {
+                continue;
+            }
+            if (source->tiles[i][j] > (SINT_64)((i * source->width) + j + 3))
+            {
+                tile_swap(source, source->tiles[i][j], (i * source->width) + j + 3);
+            }
+        }
+    }
+
+    // Condense block indices into regularly increasing indices starting at 3
+    UINT_64 current_index = 3;
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == (SINT_64)((i * source->width) + j + 3))
+            {
+                tile_swap(source, source->tiles[i][j], current_index++);
+            }
+        }
+    }
+}
+
+void randomWalks(board_state *source, UINT_64 N)
+{
+    if (!source)
+    {
+        return;
+    }
+
+    UINT_64 i, j;
+    sk_list moves;
+    sk_iterator it;
+    UINT_64 num_moves;
+    UINT_64 move_idx;
+    move *next_move;
+    for (i = 0; i < N; ++i)
+    {
+        outputGameState();
+        if (gameStateSolved(source))
+        {
+            break;
+        }
+
+        allMoves(source, &moves);
+        num_moves = sk_list_size(&moves);
+        if (num_moves == 0)
+        {
+            printf("Error! No moves found for given board state!\n");
+            outputGameState();
+            break;
+        }
+        move_idx = state.random.rand_64bit(&state.random) % num_moves;
+        j = 0;
+        sk_list_begin(&it, &moves);
+        while (it.has_next(&it))
+        {
+            next_move = it.next(&it);
+            if (j++ == move_idx)
+            {
+                printf("\n");
+                switch (next_move->dir)
+                {
+                case UP:
+                    printf("(%ld, up)\n", next_move->piece);
+                    break;
+                case DOWN:
+                    printf("(%ld, down)\n", next_move->piece);
+                    break;
+                case LEFT:
+                    printf("(%ld, left)\n", next_move->piece);
+                    break;
+                case RIGHT:
+                    printf("(%ld, right)\n", next_move->piece);
+                    break;
+                }
+                printf("\n");
+
+                applyMove(source, *next_move);
+            }
+            free(next_move);
+            sk_list_remove(&it);
+        }
+        it.destroy(&it);
+        sk_list_destroy(&moves);
+
+        normalizeState(source);
+    }
+
+    printf("\n");
+    printf("Random walk terminated after %lu moves.\n", i);
+
 }
 
 void app_debug(struct printer *out, int level, char *fmt, ...)
@@ -451,6 +1226,18 @@ void destroy_global_state(void *p)
         sk_str_destroy(state->resolved_path);
         free(state->resolved_path);
         state->resolved_path = NULL;
+    }
+
+    if (state->game_state)
+    {
+        UINT_64 i;
+        for (i = 0; i < state->game_state->height; ++i)
+        {
+            free(state->game_state->tiles[i]);
+        }
+        free(state->game_state->tiles);
+        free(state->game_state);
+        state->game_state = NULL;
     }
 }
 

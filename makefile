@@ -10,6 +10,7 @@ BUILD_ENV_BASE = $(ODIR)
 BUILD_ENV =  $(BUILD_ENV_BASE)
 BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_list)
 BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_types)
+BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_random)
 BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_str)
 BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_tree)
 BUILD_ENV += $(patsubst %,$(BUILD_ENV_BASE)/%,sk_map)
@@ -25,6 +26,8 @@ DEPF += sk_map/sk_tree_map.h
 DEPF += sk_types/sk_types.h
 DEPF += sk_types/sk_types_concat.h
 DEPF += sk_types/sk_types_parse.h
+DEPF += sk_random/sk_random.h
+DEPF += sk_random/sk_random_default.h
 DEPF += sk_str/c_str.h
 DEPF += sk_str/sk_str.h
 
@@ -41,6 +44,7 @@ OBJF += sk_types/sk_types_concat.o
 OBJF += sk_types/sk_types_parse.o
 OBJF += sk_str/c_str.o
 OBJF += sk_str/sk_str.o
+OBJF += sk_random/sk_random_default.o
 
 OBJF += sk_iterator_utils.o
 OBJ = $(patsubst %,$(ODIR)/%,$(OBJF))
