@@ -25,6 +25,9 @@
 // fabs
 #include <math.h>
 
+// gettimeofday, timeval
+#include <sys/time.h>
+
 ///
 /// SK Library Includes
 ///
@@ -242,24 +245,26 @@ void randomWalks(board_state *source, UINT_64 N);
  * @param[in] source        - Board state to solve
  * @param[out] states       - List of board states traversed in this branch
  * @param[out] soln         - List to populate with solution moves
+ * @param[out] nodes_visited- Number of nodes visited in the search
  *
  * @return                  true if the sequence of moves up to this point leads to a solution.
  *                              If a solution is found, the sequence of moves leading to solution will be stored in \c soln.
  */
-bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln);
+bool uninformedDepthFirst(board_state *source, sk_list *closed, sk_list *soln, UINT_64 *nodes_visited);
 
 /**
  * @brief                   Searches for a solution to the given board state using a breadth-first strategy.
  *
  * @param[in] source        - Board state to solve
- * @param[out] states       - List of board states traversed
+ * @param[out] closed       - List of board states traversed
+ * @param[in] open          - Instantiated list of states to populate with the frontier
  * @param[out] soln         - List to populate with solution moves
+ * @param[out] nodes_visited- Number of nodes visited in the search
  *
  * @return                  true if the sequence of moves up to this point leads to a solution.
  *                              If a solution is found, the sequence of moves leading to solution will be stored in \c soln.
  */
-void uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *soln);
-
+bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open, sk_list *soln, UINT_64 *nodes_visited);
 
 /**
  * @brief                       Debugging print function.
@@ -465,14 +470,22 @@ int main (int argc, char **argv)
     {
         sk_list soln;
         sk_list states;
+        UINT_64 nodes = 0;
+        UINT_64 soln_size = 0;
         sk_list_init(&soln, NULL);
         sk_list_init(&states, NULL);
-        if (!uninformedDepthFirst(state.game_state, &states, &soln))
+
+        struct timeval start, stop;
+        gettimeofday(&start, NULL);
+        if (!uninformedDepthFirst(state.game_state, &states, &soln, &nodes))
         {
             printf("No solution found!\n");
         }
         else
         {
+            gettimeofday(&stop, NULL);
+            soln_size = sk_list_size(&soln);
+
             outputGameState();
 
             move *next_move;
@@ -505,6 +518,12 @@ int main (int argc, char **argv)
 
             printf("\n");
             outputGameState();
+            printf("\n");
+
+            printf("Nodes Visited: %lu\n", nodes);
+            printf("Search time = %0.4f s\n",
+                    (float)(stop.tv_sec - start.tv_sec + (stop.tv_usec - start.tv_usec)/(float)1000000));
+            printf("Solution Size: %lu moves\n", soln_size);
         }
 
         sk_list_destroy(&states);
@@ -512,7 +531,79 @@ int main (int argc, char **argv)
     }
     else if (state.breadth_first)
     {
-        // TODO: Implement me
+        sk_list soln;
+        sk_list closed;
+        sk_list open;
+        UINT_64 nodes = 0;
+        UINT_64 soln_size = 0;
+        sk_list_init(&soln, NULL);
+        sk_list_init(&closed, NULL);
+        sk_list_init(&open, NULL);
+
+        struct timeval start, stop;
+        gettimeofday(&start, NULL);
+        if (!uninformedBreadthFirst(state.game_state, &closed, &open, &soln, &nodes))
+        {
+            printf("No solution found!\n");
+        }
+        else
+        {
+            gettimeofday(&stop, NULL);
+            soln_size = sk_list_size(&soln);
+
+            outputGameState();
+
+            move *next_move;
+            sk_iterator it;
+            sk_list_begin(&it, &soln);
+            while (it.has_next(&it))
+            {
+                next_move = it.next(&it);
+                applyMove(state.game_state, *next_move);
+                switch (next_move->dir)
+                {
+                case UP:
+                    printf("(%ld, up)\n", next_move->piece);
+                    break;
+                case DOWN:
+                    printf("(%ld, down)\n", next_move->piece);
+                    break;
+                case LEFT:
+                    printf("(%ld, left)\n", next_move->piece);
+                    break;
+                case RIGHT:
+                    printf("(%ld, right)\n", next_move->piece);
+                    break;
+                }
+
+                free(next_move);
+                sk_list_remove(&it);
+            }
+            it.destroy(&it);
+
+            printf("\n");
+            outputGameState();
+            printf("\n");
+
+            printf("Nodes Visited: %lu\n", nodes);
+            printf("Search time = %0.4f s\n",
+                    (float)(stop.tv_sec - start.tv_sec + (stop.tv_usec - start.tv_usec)/(float)1000000));
+            printf("Solution Size: %lu moves\n", soln_size);
+
+            sk_list_begin(&it, &closed);
+            while (it.has_next(&it))
+            {
+                board_state *next = it.next(&it);
+                destroy_board_state(next);
+                free(next);
+                sk_list_remove(&it);
+            }
+            it.destroy(&it);
+        }
+
+        sk_list_destroy(&closed);
+        sk_list_destroy(&open);
+        sk_list_destroy(&soln);
     }
     else
     {
@@ -685,28 +776,38 @@ void outputGameState()
     }
 }
 
-void printGameState(board_state *state)
+void printGameState(board_state *game_state)
 {
-    if (!state)
+    if (!game_state)
     {
         return;
     }
 
-    printf("%lu,%lu,\n",
-            state->width,
-            state->height);
+    state.printer->debug(state.printer, DEBUG_DETAILS,
+                        "%lu,%lu,\n",
+                        game_state->width,
+                        game_state->height);
+
+    char *buffer = ALLOC(*buffer, game_state->width * 10);
+    char *curr = buffer;
+
 
     UINT_64 i;
     UINT_64 j;
-    for (i = 0; i < state->height; ++i)
+    for (i = 0; i < game_state->height; ++i)
     {
-        for (j = 0; j < state->width; ++j)
+        curr = buffer;
+        for (j = 0; j < game_state->width; ++j)
         {
-            printf("%ld,", state->tiles[i][j]);
+            curr += sprintf(curr, "%ld,", game_state->tiles[i][j]);
         }
 
-        printf("\n");
+        state.printer->debug(state.printer, DEBUG_DETAILS,
+                            "%s\n",
+                            buffer);
     }
+
+    free(buffer);
 }
 
 bool cloneGameState(board_state *source, board_state *dest)
@@ -1363,9 +1464,9 @@ UINT_64 numZeros(board_state *source)
     return zeros;
 }
 
-bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
+bool uninformedDepthFirst(board_state *source, sk_list *closed, sk_list *soln, UINT_64 *nodes_visited)
 {
-    if (!source || !states || !soln)
+    if (!source || !closed || !soln)
     {
         return false;
     }
@@ -1403,7 +1504,7 @@ bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
         cloneGameState(&next_state, normalized_next_state);
 
         found_match = false;
-        sk_list_begin(&check_it, states);
+        sk_list_begin(&check_it, closed);
         while(check_it.has_next(&check_it))
         {
             next_check_state = check_it.next(&check_it);
@@ -1417,17 +1518,16 @@ bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
 
         if (!found_match)
         {
+            state.printer->debug(state.printer, DEBUG_DETAILS,
+                                "Considering:\n");
+            printGameState(&next_state);
+            (*nodes_visited)++;
 
-            sk_list_append(states, normalized_next_state);
+            sk_list_append(closed, normalized_next_state);
 
-            solved = uninformedDepthFirst(&next_state, states, soln);
+            solved = uninformedDepthFirst(&next_state, closed, soln, nodes_visited);
 
             destroy_board_state(&next_state);
-
-            sk_list_pop_tail(states);
-
-            destroy_board_state(normalized_next_state);
-            free(normalized_next_state);
 
             if (solved)
             {
@@ -1445,6 +1545,9 @@ bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
         }
         else
         {
+            state.printer->debug(state.printer, DEBUG_DETAILS,
+                                "FOUND DUPLICATE:\n");
+
             destroy_board_state(&next_state);
             destroy_board_state(normalized_next_state);
             free(normalized_next_state);
@@ -1456,10 +1559,20 @@ bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
     it.destroy(&it);
     sk_list_destroy(&moves);
 
+    sk_list_begin(&it, closed);
+    while (it.has_next(&it))
+    {
+        board_state *next = it.next(&it);
+        destroy_board_state(next);
+        free(next);
+        sk_list_remove(&it);
+    }
+    it.destroy(&it);
+
     return false;
 }
 
-bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open, sk_list *soln)
+bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open, sk_list *soln, UINT_64 *nodes_visited)
 {
     if (!source || !closed || !open || !soln)
     {
@@ -1479,49 +1592,122 @@ bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open,
     root->state = ALLOC(*(root->state), 1);
     cloneGameState(source, root->state);
     sk_list_init(&root->move_list, NULL);
-
     sk_list_append(open, root);
+    (*nodes_visited)++;
 
-
-    sk_iterator check_it;
-    move *next_move;
-    board_state next_state;
-    board_state *normalized_next_state;
-    board_state *next_check_state;
-    bool found_match = false;
-    bool solved = false;
-
-
+    // Iterator across the open list
     sk_iterator open_it;
+    // Currently considered node
     breadth_node *current;
+    // Next node to add to the open list
+    breadth_node *next;
+    // Normalized state of \c next to check for repeated states
+    board_state *normalized_next_state;
+    // Iterator across closed list
+    sk_iterator check_it;
+    // Next state in the check list to consider
+    board_state *next_check_state;
+    // Whether we found a match in the closed list for \c normalized_next_state
+    bool found_match = false;
+    // List of moves possible in the current state
     sk_list moves;
+    // Iterator across the move list
     sk_iterator move_it;
+    // Next move to consider
+    move *next_move;
 
-    sk_list_begin(open_it, open);
+    sk_list_begin(&open_it, open);
     while (open_it.has_next(&open_it))
     {
         current = open_it.next(&open_it);
-
+        sk_list_remove(&open_it);
 
         allMoves(current->state, &moves);
         if (sk_list_size(&moves) == 0)
         {
-            // FIXME
             printf("Error! No moves found for given board state!\n");
             sk_list_destroy(&moves);
+
+            destroy_board_state(current->state);
+            free(current->state);
+            sk_iterator soln_it;
+            sk_list_begin(&soln_it, &current->move_list);
+            while (soln_it.has_next(&soln_it))
+            {
+                free(soln_it.next(&soln_it));
+                sk_list_remove(&soln_it);
+            }
+            soln_it.destroy(&soln_it);
+            sk_list_destroy(&current->move_list);
+            free(current);
             return false;
         }
-
 
         sk_list_begin(&move_it, &moves);
         while (move_it.has_next(&move_it))
         {
-            // FIXME WIP
-            next_move = it.next(&it);
-            applyMoveCloning(source, *next_move, &next_state);
+            next_move = move_it.next(&move_it);
+            next = ALLOC(*next, 1);
+            next->state = ALLOC(*(next->state), 1);
+            applyMoveCloning(current->state, *next_move, next->state);
+
+            if (gameStateSolved(next->state))
+            {
+                // Destroy the new node we created
+                destroy_board_state(next->state);
+                free(next->state);
+                free(next);
+
+                // Populate the solution list with the winning moves
+                sk_iterator soln_it;
+                sk_list_begin(&soln_it, &current->move_list);
+                while (soln_it.has_next(&soln_it))
+                {
+                    move *next_move = soln_it.next(&soln_it);
+                    move *cloned = ALLOC(*cloned, 1);
+                    *cloned = *next_move;
+                    sk_list_append(soln, cloned);
+                }
+                soln_it.destroy(&soln_it);
+                move *cloned = ALLOC(*cloned, 1);
+                *cloned = *next_move;
+                sk_list_append(soln, cloned);
+
+                // Destroy the move list
+                free(next_move);
+                sk_list_remove(&move_it);
+                while (move_it.has_next(&move_it))
+                {
+                    free(move_it.next(&move_it));
+                    sk_list_remove(&move_it);
+                }
+                move_it.destroy(&move_it);
+                sk_list_destroy(&moves);
+
+                // Free all elements from the open list
+                while (open_it.has_next(&open_it))
+                {
+                    current = open_it.next(&open_it);
+                    destroy_board_state(current->state);
+                    free(current->state);
+                    sk_iterator soln_it;
+                    sk_list_begin(&soln_it, &current->move_list);
+                    while (soln_it.has_next(&soln_it))
+                    {
+                        free(soln_it.next(&soln_it));
+                        sk_list_remove(&soln_it);
+                    }
+                    soln_it.destroy(&soln_it);
+                    sk_list_destroy(&current->move_list);
+                    free(current);
+                }
+                open_it.destroy(&open_it);
+
+                return true;
+            }
 
             normalized_next_state = ALLOC(*normalized_next_state, 1);
-            cloneGameState(&next_state, normalized_next_state);
+            cloneGameState(next->state, normalized_next_state);
 
             found_match = false;
             sk_list_begin(&check_it, closed);
@@ -1536,47 +1722,77 @@ bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open,
             }
             check_it.destroy(&check_it);
 
+            // If we haven't visited an equivalent state yet, add the normalized
+            //      state to the closed list and the new state to the open list
             if (!found_match)
             {
-
                 sk_list_append(closed, normalized_next_state);
 
-                solved = uninformedDepthFirst(&next_state, closed, soln);
+                state.printer->debug(state.printer, DEBUG_DETAILS,
+                                    "Considering:\n");
+                printGameState(next->state);
+                (*nodes_visited)++;
 
-                destroy_board_state(&next_state);
-
-                sk_list_pop_tail(closed);
-
-                destroy_board_state(normalized_next_state);
-                free(normalized_next_state);
-
-                if (solved)
+                // Update the next node with the list of moves required to reach it
+                sk_list_init(&next->move_list, NULL);
+                sk_iterator soln_it;
+                sk_list_begin(&soln_it, &current->move_list);
+                while (soln_it.has_next(&soln_it))
                 {
-                    sk_list_prepend(soln, next_move);
+                    move *next_move = soln_it.next(&soln_it);
+                    move *cloned = ALLOC(*cloned, 1);
+                    *cloned = *next_move;
+                    sk_list_append(&next->move_list, cloned);
+                }
+                soln_it.destroy(&soln_it);
 
-                    while (it.has_next(&it))
-                    {
-                        next_move = it.next(&it);
-                        free(next_move);
-                    }
-                    it.destroy(&it);
+                move *cloned = ALLOC(*cloned, 1);
+                *cloned = *next_move;
+                sk_list_append(&next->move_list, cloned);
 
-                    return true;
+                sk_list_append(open, next);
+                //
+                // -- HACK --
+                //  If the open list iterator reached the end too soon, reinitialize it.
+                //
+                if (sk_list_size(open) != 0 && !open_it.has_next(&open_it))
+                {
+                    open_it.destroy(&open_it);
+                    sk_list_begin(&open_it, open);
                 }
             }
             else
             {
-                destroy_board_state(&next_state);
+                state.printer->debug(state.printer, DEBUG_DETAILS,
+                                    "FOUND DUPLICATE\n");
+
+                destroy_board_state(next->state);
+                free(next->state);
+                free(next);
+
                 destroy_board_state(normalized_next_state);
                 free(normalized_next_state);
             }
 
             free(next_move);
-            sk_list_remove(&it);
+            sk_list_remove(&move_it);
         }
-        it.destroy(&it);
+        move_it.destroy(&move_it);
         sk_list_destroy(&moves);
 
+        // Destroy the node we just visited
+        destroy_board_state(current->state);
+        free(current->state);
+        sk_iterator soln_it;
+        sk_list_begin(&soln_it, &current->move_list);
+        while (soln_it.has_next(&soln_it))
+        {
+            free(soln_it.next(&soln_it));
+            sk_list_remove(&soln_it);
+        }
+        soln_it.destroy(&soln_it);
+        sk_list_destroy(&current->move_list);
+        free(current);
     }
 
     return false;
