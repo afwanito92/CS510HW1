@@ -225,6 +225,8 @@ bool stateEqual(board_state *a, board_state *b);
  */
 void normalizeState(board_state *source);
 
+void destroy_board_state(void *p);
+
 /**
  * @brief                   Applies up to \c N random moves to \c source, halting if the
  *                              board is solved after any move.
@@ -233,6 +235,30 @@ void normalizeState(board_state *source);
  * @param[in] N             - Maximum number of moves to apply.
  */
 void randomWalks(board_state *source, UINT_64 N);
+
+/**
+ * @brief                   Searches for a solution to the given board state using a depth-first strategy.
+ *
+ * @param[in] source        - Board state to solve
+ * @param[out] states       - List of board states traversed in this branch
+ * @param[out] soln         - List to populate with solution moves
+ *
+ * @return                  true if the sequence of moves up to this point leads to a solution.
+ *                              If a solution is found, the sequence of moves leading to solution will be stored in \c soln.
+ */
+bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln);
+
+/**
+ * @brief                   Searches for a solution to the given board state using a breadth-first strategy.
+ *
+ * @param[in] source        - Board state to solve
+ * @param[out] states       - List of board states traversed
+ * @param[out] soln         - List to populate with solution moves
+ *
+ * @return                  true if the sequence of moves up to this point leads to a solution.
+ *                              If a solution is found, the sequence of moves leading to solution will be stored in \c soln.
+ */
+void uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *soln);
 
 
 /**
@@ -437,7 +463,52 @@ int main (int argc, char **argv)
     }
     else if (state.depth_first)
     {
-        // TODO: Implement me
+        sk_list soln;
+        sk_list states;
+        sk_list_init(&soln, NULL);
+        sk_list_init(&states, NULL);
+        if (!uninformedDepthFirst(state.game_state, &states, &soln))
+        {
+            printf("No solution found!\n");
+        }
+        else
+        {
+            outputGameState();
+
+            move *next_move;
+            sk_iterator it;
+            sk_list_begin(&it, &soln);
+            while (it.has_next(&it))
+            {
+                next_move = it.next(&it);
+                applyMove(state.game_state, *next_move);
+                switch (next_move->dir)
+                {
+                case UP:
+                    printf("(%ld, up)\n", next_move->piece);
+                    break;
+                case DOWN:
+                    printf("(%ld, down)\n", next_move->piece);
+                    break;
+                case LEFT:
+                    printf("(%ld, left)\n", next_move->piece);
+                    break;
+                case RIGHT:
+                    printf("(%ld, right)\n", next_move->piece);
+                    break;
+                }
+
+                free(next_move);
+                sk_list_remove(&it);
+            }
+            it.destroy(&it);
+
+            printf("\n");
+            outputGameState();
+        }
+
+        sk_list_destroy(&states);
+        sk_list_destroy(&soln);
     }
     else if (state.breadth_first)
     {
@@ -608,6 +679,30 @@ void outputGameState()
         for (j = 0; j < state.game_state->width; ++j)
         {
             printf("%ld,", state.game_state->tiles[i][j]);
+        }
+
+        printf("\n");
+    }
+}
+
+void printGameState(board_state *state)
+{
+    if (!state)
+    {
+        return;
+    }
+
+    printf("%lu,%lu,\n",
+            state->width,
+            state->height);
+
+    UINT_64 i;
+    UINT_64 j;
+    for (i = 0; i < state->height; ++i)
+    {
+        for (j = 0; j < state->width; ++j)
+        {
+            printf("%ld,", state->tiles[i][j]);
         }
 
         printf("\n");
@@ -1143,6 +1238,23 @@ void normalizeState(board_state *source)
     }
 }
 
+void destroy_board_state(void *p)
+{
+    if (!p)
+    {
+        return;
+    }
+
+    board_state *state = p;
+
+    UINT_64 i;
+    for (i = 0; i < state->height; ++i)
+    {
+        free(state->tiles[i]);
+    }
+    free(state->tiles);
+}
+
 void randomWalks(board_state *source, UINT_64 N)
 {
     if (!source)
@@ -1233,6 +1345,243 @@ void randomWalks(board_state *source, UINT_64 N)
 
 }
 
+UINT_64 numZeros(board_state *source)
+{
+    UINT_64 i, j;
+    UINT_64 zeros = 0;
+
+    for (i = 0; i < source->height; ++i)
+    {
+        for (j = 0; j < source->width; ++j)
+        {
+            if (source->tiles[i][j] == 0)
+            {
+                zeros++;
+            }
+        }
+    }
+    return zeros;
+}
+
+bool uninformedDepthFirst(board_state *source, sk_list *states, sk_list *soln)
+{
+    if (!source || !states || !soln)
+    {
+        return false;
+    }
+
+    sk_list moves;
+    sk_iterator it;
+    sk_iterator check_it;
+    move *next_move;
+    board_state next_state;
+    board_state *normalized_next_state;
+    board_state *next_check_state;
+    bool found_match = false;
+    bool solved = false;
+
+    if (gameStateSolved(source))
+    {
+        return true;
+    }
+
+    allMoves(source, &moves);
+    if (sk_list_size(&moves) == 0)
+    {
+        printf("Error! No moves found for given board state!\n");
+        sk_list_destroy(&moves);
+        return false;
+    }
+
+    sk_list_begin(&it, &moves);
+    while (it.has_next(&it))
+    {
+        next_move = it.next(&it);
+        applyMoveCloning(source, *next_move, &next_state);
+
+        normalized_next_state = ALLOC(*normalized_next_state, 1);
+        cloneGameState(&next_state, normalized_next_state);
+
+        found_match = false;
+        sk_list_begin(&check_it, states);
+        while(check_it.has_next(&check_it))
+        {
+            next_check_state = check_it.next(&check_it);
+            if (stateEqual(normalized_next_state, next_check_state))
+            {
+                found_match = true;
+                break;
+            }
+        }
+        check_it.destroy(&check_it);
+
+        if (!found_match)
+        {
+
+            sk_list_append(states, normalized_next_state);
+
+            solved = uninformedDepthFirst(&next_state, states, soln);
+
+            destroy_board_state(&next_state);
+
+            sk_list_pop_tail(states);
+
+            destroy_board_state(normalized_next_state);
+            free(normalized_next_state);
+
+            if (solved)
+            {
+                sk_list_prepend(soln, next_move);
+
+                while (it.has_next(&it))
+                {
+                    next_move = it.next(&it);
+                    free(next_move);
+                }
+                it.destroy(&it);
+
+                return true;
+            }
+        }
+        else
+        {
+            destroy_board_state(&next_state);
+            destroy_board_state(normalized_next_state);
+            free(normalized_next_state);
+        }
+
+        free(next_move);
+        sk_list_remove(&it);
+    }
+    it.destroy(&it);
+    sk_list_destroy(&moves);
+
+    return false;
+}
+
+bool uninformedBreadthFirst(board_state *source, sk_list *closed, sk_list *open, sk_list *soln)
+{
+    if (!source || !closed || !open || !soln)
+    {
+        return false;
+    }
+
+    struct breadth_node;
+    typedef struct breadth_node breadth_node;
+
+    struct breadth_node
+    {
+        board_state *state;
+        sk_list move_list;
+    };
+
+    breadth_node *root = ALLOC(*root, 1);
+    root->state = ALLOC(*(root->state), 1);
+    cloneGameState(source, root->state);
+    sk_list_init(&root->move_list, NULL);
+
+    sk_list_append(open, root);
+
+
+    sk_iterator check_it;
+    move *next_move;
+    board_state next_state;
+    board_state *normalized_next_state;
+    board_state *next_check_state;
+    bool found_match = false;
+    bool solved = false;
+
+
+    sk_iterator open_it;
+    breadth_node *current;
+    sk_list moves;
+    sk_iterator move_it;
+
+    sk_list_begin(open_it, open);
+    while (open_it.has_next(&open_it))
+    {
+        current = open_it.next(&open_it);
+
+
+        allMoves(current->state, &moves);
+        if (sk_list_size(&moves) == 0)
+        {
+            // FIXME
+            printf("Error! No moves found for given board state!\n");
+            sk_list_destroy(&moves);
+            return false;
+        }
+
+
+        sk_list_begin(&move_it, &moves);
+        while (move_it.has_next(&move_it))
+        {
+            // FIXME WIP
+            next_move = it.next(&it);
+            applyMoveCloning(source, *next_move, &next_state);
+
+            normalized_next_state = ALLOC(*normalized_next_state, 1);
+            cloneGameState(&next_state, normalized_next_state);
+
+            found_match = false;
+            sk_list_begin(&check_it, closed);
+            while(check_it.has_next(&check_it))
+            {
+                next_check_state = check_it.next(&check_it);
+                if (stateEqual(normalized_next_state, next_check_state))
+                {
+                    found_match = true;
+                    break;
+                }
+            }
+            check_it.destroy(&check_it);
+
+            if (!found_match)
+            {
+
+                sk_list_append(closed, normalized_next_state);
+
+                solved = uninformedDepthFirst(&next_state, closed, soln);
+
+                destroy_board_state(&next_state);
+
+                sk_list_pop_tail(closed);
+
+                destroy_board_state(normalized_next_state);
+                free(normalized_next_state);
+
+                if (solved)
+                {
+                    sk_list_prepend(soln, next_move);
+
+                    while (it.has_next(&it))
+                    {
+                        next_move = it.next(&it);
+                        free(next_move);
+                    }
+                    it.destroy(&it);
+
+                    return true;
+                }
+            }
+            else
+            {
+                destroy_board_state(&next_state);
+                destroy_board_state(normalized_next_state);
+                free(normalized_next_state);
+            }
+
+            free(next_move);
+            sk_list_remove(&it);
+        }
+        it.destroy(&it);
+        sk_list_destroy(&moves);
+
+    }
+
+    return false;
+}
+
 void app_debug(struct printer *out, int level, char *fmt, ...)
 {
     if (!out || out->debug_level < level || !fmt)
@@ -1295,8 +1644,7 @@ void handle_r(sk_str *match, sk_str **args, void *handle)
 void handle_d(sk_str *match, sk_str **args, void *handle)
 {
     global_state *state = handle;
-    sk_str *arg = args[1];
-    if (!match || !args || !arg || !handle)
+    if (!match || !args || !handle)
     {
         return;
     }
@@ -1309,8 +1657,7 @@ void handle_d(sk_str *match, sk_str **args, void *handle)
 void handle_b(sk_str *match, sk_str **args, void *handle)
 {
     global_state *state = handle;
-    sk_str *arg = args[1];
-    if (!match || !args || !arg || !handle)
+    if (!match || !args || !handle)
     {
         return;
     }
