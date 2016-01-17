@@ -114,12 +114,12 @@ The following test cases were used to test the validity of this program:
 ./sbp -r 10 -f assets/SBP-level1.txt
 ./sbp -r 10 -f assets/SBP-level2.txt
 ./sbp -r 10 -f assets/SBP-level3.txt
-./sbp -d 10 -f assets/SBP-level0.txt
-./sbp -d 10 -f assets/SBP-level1.txt
-./sbp -d 10 -f assets/SBP-level2.txt
-./sbp -d 10 -f assets/SBP-level3.txt
-./sbp -b 10 -f assets/SBP-level0.txt
-./sbp -b 10 -f assets/SBP-level1.txt
-./sbp -b 10 -f assets/SBP-level2.txt
-./sbp -b 10 -f assets/SBP-level3.txt
+./sbp -d -f assets/SBP-level0.txt
+./sbp -d -f assets/SBP-level1.txt
+./sbp -d -f assets/SBP-level2.txt
+./sbp -d -f assets/SBP-level3.txt
+./sbp -b -f assets/SBP-level0.txt
+./sbp -b -f assets/SBP-level1.txt
+./sbp -b -f assets/SBP-level2.txt
+./sbp -b -f assets/SBP-level3.txt
 

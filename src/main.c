@@ -1549,6 +1549,67 @@ bool uninformedDepthFirst(board_state *source, sk_hash_table *closed, sk_list *o
     {
         current = sk_list_pop_head(open);
 
+        (*nodes_visited)++;
+        state.printer->debug(state.printer, DEBUG_DETAILS,
+                            "Considering:\n");
+        printGameState(current->state);
+
+        if (gameStateSolved(current->state))
+        {
+            // Populate the solution list with the winning moves
+            sk_iterator soln_it;
+            sk_list_begin(&soln_it, &current->move_list);
+            while (soln_it.has_next(&soln_it))
+            {
+                move *next_move = soln_it.next(&soln_it);
+                move *cloned = ALLOC(*cloned, 1);
+                *cloned = *next_move;
+                sk_list_append(soln, cloned);
+
+                free(next_move);
+                sk_list_remove(&soln_it);
+            }
+            soln_it.destroy(&soln_it);
+
+            destroy_board_state(current->state);
+            free(current->state);
+            sk_list_destroy(&current->move_list);
+            free(current);
+
+            // Free all elements from the open list
+            sk_iterator open_it;
+            sk_list_begin(&open_it, open);
+            while (open_it.has_next(&open_it))
+            {
+                current = open_it.next(&open_it);
+                destroy_board_state(current->state);
+                free(current->state);
+                sk_iterator soln_it;
+                sk_list_begin(&soln_it, &current->move_list);
+                while (soln_it.has_next(&soln_it))
+                {
+                    free(soln_it.next(&soln_it));
+                    sk_list_remove(&soln_it);
+                }
+                soln_it.destroy(&soln_it);
+                sk_list_destroy(&current->move_list);
+                free(current);
+            }
+            open_it.destroy(&open_it);
+
+            sk_iterator closed_it;
+            sk_hash_table_begin(&closed_it, closed);
+            while (closed_it.has_next(&closed_it))
+            {
+                board_state *current = closed_it.next(&closed_it);
+                destroy_board_state(current);
+                free(current);
+            }
+            closed_it.destroy(&closed_it);
+
+            return true;
+        }
+
         allMoves(current->state, &moves);
         if (sk_list_size(&moves) == 0)
         {
@@ -1603,88 +1664,13 @@ bool uninformedDepthFirst(board_state *source, sk_hash_table *closed, sk_list *o
             return false;
         }
 
-        sk_list_begin(&move_it, &moves);
-        while (move_it.has_next(&move_it))
+        while (!sk_list_empty(&moves))
         {
-            next_move = move_it.next(&move_it);
+            // Reverse the list order for LIFO queue processing
+            next_move = sk_list_pop_tail(&moves);
             next = ALLOC(*next, 1);
             next->state = ALLOC(*(next->state), 1);
             applyMoveCloning(current->state, *next_move, next->state);
-
-            if (gameStateSolved(next->state))
-            {
-                // Destroy the new node we created
-                destroy_board_state(next->state);
-                free(next->state);
-                free(next);
-
-                // Populate the solution list with the winning moves
-                sk_iterator soln_it;
-                sk_list_begin(&soln_it, &current->move_list);
-                while (soln_it.has_next(&soln_it))
-                {
-                    move *next_move = soln_it.next(&soln_it);
-                    move *cloned = ALLOC(*cloned, 1);
-                    *cloned = *next_move;
-                    sk_list_append(soln, cloned);
-
-                    free(next_move);
-                    sk_list_remove(&soln_it);
-                }
-                soln_it.destroy(&soln_it);
-                move *cloned = ALLOC(*cloned, 1);
-                *cloned = *next_move;
-                sk_list_append(soln, cloned);
-
-                // Destroy the move list
-                free(next_move);
-                sk_list_remove(&move_it);
-                while (move_it.has_next(&move_it))
-                {
-                    free(move_it.next(&move_it));
-                    sk_list_remove(&move_it);
-                }
-                move_it.destroy(&move_it);
-                sk_list_destroy(&moves);
-
-                destroy_board_state(current->state);
-                free(current->state);
-                sk_list_destroy(&current->move_list);
-                free(current);
-
-                // Free all elements from the open list
-                sk_iterator open_it;
-                sk_list_begin(&open_it, open);
-                while (open_it.has_next(&open_it))
-                {
-                    current = open_it.next(&open_it);
-                    destroy_board_state(current->state);
-                    free(current->state);
-                    sk_iterator soln_it;
-                    sk_list_begin(&soln_it, &current->move_list);
-                    while (soln_it.has_next(&soln_it))
-                    {
-                        free(soln_it.next(&soln_it));
-                        sk_list_remove(&soln_it);
-                    }
-                    soln_it.destroy(&soln_it);
-                    sk_list_destroy(&current->move_list);
-                    free(current);
-                }
-                open_it.destroy(&open_it);
-
-                sk_iterator closed_it;
-                sk_hash_table_begin(&closed_it, closed);
-                while (closed_it.has_next(&closed_it))
-                {
-                    board_state *current = closed_it.next(&closed_it);
-                    destroy_board_state(current);
-                    free(current);
-                }
-                closed_it.destroy(&closed_it);
-
-                return true;
-            }
 
             normalized_next_state = ALLOC(*normalized_next_state, 1);
             cloneGameState(next->state, normalized_next_state);
@@ -1695,11 +1681,6 @@ bool uninformedDepthFirst(board_state *source, sk_hash_table *closed, sk_list *o
             if (!sk_hash_table_contains(closed, normalized_next_state))
             {
                 sk_hash_table_put(closed, normalized_next_state);
-
-                state.printer->debug(state.printer, DEBUG_DETAILS,
-                                    "Considering:\n");
-                printGameState(next->state);
-                (*nodes_visited)++;
 
                 // Update the next node with the list of moves required to reach it
                 sk_list_init(&next->move_list, NULL);
@@ -1734,9 +1715,7 @@ bool uninformedDepthFirst(board_state *source, sk_hash_table *closed, sk_list *o
             }
 
             free(next_move);
-            sk_list_remove(&move_it);
         }
-        move_it.destroy(&move_it);
         sk_list_destroy(&moves);
 
         // Destroy the node we just visited
